@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TOTP Authenticator</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #eef4ff, #f8fbff);
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .page {
+            width: 560px;
+            animation: fadeIn 0.6s ease;
+        }
+
+        .page-title {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .page-title .label {
+            color: #1f6feb;
+            font-size: 14px;
+            font-weight: bold;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .page-title h1 {
+            margin: 0;
+            font-size: 38px;
+            color: #111827;
+            letter-spacing: -0.8px;
+        }
+
+        .card {
+            background: white;
+            padding: 42px;
+            border-radius: 26px;
+            box-shadow: 0 18px 45px rgba(31,111,235,0.10);
+            text-align: center;
+        }
+
+        .user-text {
+            color: #64748b;
+            font-size: 16px;
+            margin-bottom: 25px;
+        }
+
+        .otp-box {
+            background: #f8fbff;
+            border: 1px solid #dbeafe;
+            border-radius: 22px;
+            padding: 28px;
+            margin: 24px 0;
+        }
+
+        .otp {
+            font-size: 58px;
+            font-weight: bold;
+            letter-spacing: 8px;
+            color: #1f6feb;
+            margin-bottom: 12px;
+        }
+
+        .timer {
+            font-size: 18px;
+            color: #64748b;
+        }
+
+        .secret {
+            margin-top: 24px;
+            font-size: 12px;
+            color: #94a3b8;
+            word-break: break-all;
+            line-height: 1.6;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(22px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="page">
+
+    <div class="page-title">
+        <div class="label">Simulated Client</div>
+        <h1>Authenticator</h1>
+    </div>
+
+    <div class="card">
+
+        <div class="user-text">
+            User: <strong>{{ username }}</strong>
+        </div>
+
+        <div class="otp-box">
+            <div class="otp" id="otp">------</div>
+            <div class="timer" id="timer">Expires in: -- seconds</div>
+        </div>
+
+        <div class="secret">
+            Shared Secret for simulation only:<br>
+            {{ secret }}
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+    const secret = "{{ secret }}";
+
+    function base32ToBytes(base32) {
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        let bits = "";
+        let bytes = [];
+
+        base32 = base32.replace(/=+$/, "");
+
+        for (let i = 0; i < base32.length; i++) {
+            const value = alphabet.indexOf(base32[i].toUpperCase());
+            bits += value.toString(2).padStart(5, "0");
+        }
+
+        for (let i = 0; i + 8 <= bits.length; i += 8) {
+            bytes.push(parseInt(bits.substring(i, i + 8), 2));
+        }
+
+        return new Uint8Array(bytes);
+    }
+
+    function counterToBytes(counter) {
+        const buffer = new ArrayBuffer(8);
+        const view = new DataView(buffer);
+
+        view.setUint32(0, Math.floor(counter / 0x100000000));
+        view.setUint32(4, counter);
+
+        return new Uint8Array(buffer);
+    }
+
+    async function generateTOTP(secret) {
+        const timeStep = Math.floor(Date.now() / 1000 / 30);
+        const keyBytes = base32ToBytes(secret);
+        const counterBytes = counterToBytes(timeStep);
+
+        const cryptoKey = await crypto.subtle.importKey(
+            "raw",
+            keyBytes,
+            { name: "HMAC", hash: "SHA-1" },
+            false,
+            ["sign"]
+        );
+
+        const hmac = new Uint8Array(
+            await crypto.subtle.sign("HMAC", cryptoKey, counterBytes)
+        );
+
+        const offset = hmac[hmac.length - 1] & 0x0f;
+
+        const binary =
+            ((hmac[offset] & 0x7f) << 24) |
+            ((hmac[offset + 1] & 0xff) << 16) |
+            ((hmac[offset + 2] & 0xff) << 8) |
+            (hmac[offset + 3] & 0xff);
+
+        const otp = binary % 1000000;
+        return otp.toString().padStart(6, "0");
+    }
+
+    async function updateOTP() {
+        const otp = await generateTOTP(secret);
+        const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+
+        document.getElementById("otp").innerText = otp;
+        document.getElementById("timer").innerText =
+            "Expires in: " + remaining + " seconds";
+    }
+
+    updateOTP();
+    setInterval(updateOTP, 1000);
+</script>
+
+</body>
+</html>
