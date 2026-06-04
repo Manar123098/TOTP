@@ -10,6 +10,7 @@ from auth import (
 from users import users_db
 from security import load_secret
 
+
 app = Flask(__name__)
 app.secret_key = "totp-demo-secret-key"
 
@@ -24,11 +25,13 @@ def register_page():
     return render_template("register.html")
 
 
-@app.route("/register", methods=["POST"]) 
+# Registration phase
+@app.route("/register", methods=["POST"])
 def register():
     username = request.form.get("username")
     password = request.form.get("password")
 
+    # Register the user and generate a unique shared secret
     success, result = register_user(username, password)
 
     if success:
@@ -43,6 +46,7 @@ def register():
     )
 
 
+# Login phase - first factor: password
 @app.route("/login", methods=["POST"])
 def login_password():
     username = request.form.get("username")
@@ -54,10 +58,14 @@ def login_password():
             error="Invalid username or password"
         )
 
+    # Check the password before requesting OTP
     if not verify_password(username, password):
+        # Use login() so wrong password attempts are counted for lockout
+        success, message = login(username, password, "")
+
         return render_template(
             "index.html",
-            error="Invalid username or password"
+            error=message
         )
 
     # Store login data temporarily until OTP verification is completed
@@ -67,12 +75,14 @@ def login_password():
     return redirect(url_for("otp_verify_page"))
 
 
+# OTP verification page
 @app.route("/otp-verify", methods=["GET"])
 def otp_verify_page():
     username = session.get("username")
+    password = session.get("password")
 
     # Prevent direct access to OTP verification without password validation
-    if not username or username not in users_db:
+    if not username or username not in users_db or not password:
         return redirect(url_for("index"))
 
     return render_template(
@@ -81,6 +91,7 @@ def otp_verify_page():
     )
 
 
+# Login phase - second factor: OTP
 @app.route("/verify-otp", methods=["POST"])
 def verify_otp():
     username = session.get("username")
@@ -88,9 +99,21 @@ def verify_otp():
     otp = request.form.get("otp")
 
     # Reject OTP verification if no login session exists
-    if not username or username not in users_db:
+    if not username or username not in users_db or not password:
         return redirect(url_for("index"))
 
+    # Enforce 6-digit OTP on the server side
+    if not otp or not otp.isdigit() or len(otp) != 6:
+        success, message = login(username, password, otp or "")
+
+        return render_template(
+            "otp_verify.html",
+            username=username,
+            success=success,
+            message=message
+        )
+
+    # Server side verifies password and OTP using the same auth logic
     success, message = login(username, password, otp)
 
     if success:
@@ -107,13 +130,23 @@ def verify_otp():
         message=message
     )
 
-# Simulated authenticator page for generating TOTP codes
+
+# Simulated client-side authenticator for generating TOTP codes
 @app.route("/authenticator/<username>", methods=["GET"])
 def authenticator_page(username):
-    if username not in users_db:
+    session_username = session.get("username")
+    password = session.get("password")
+
+    # Protect the authenticator page from direct URL access
+    if (
+        not session_username
+        or session_username != username
+        or username not in users_db
+        or not password
+    ):
         return redirect(url_for("index"))
 
-     
+    # Decrypt the shared secret only for the simulated authenticator page
     secret = load_secret(users_db[username]["shared_secret"])
 
     return render_template(
@@ -136,7 +169,8 @@ def dashboard():
         username=username
     )
 
-# Verify user identity before generating a new shared secret
+
+# Re-enrollment phase
 @app.route("/re-enroll", methods=["GET", "POST"])
 def re_enroll():
     if request.method == "POST":
@@ -149,13 +183,14 @@ def re_enroll():
                 error="Invalid username or password"
             )
 
+        # Verify user identity before replacing the shared secret
         if not verify_password(username, password):
             return render_template(
                 "re_enroll.html",
                 error="Invalid username or password"
             )
 
-        # Generate a new shared secret after confirming the user's password
+        # Generate a new shared secret and replace the old one
         success, result = re_enroll_user(username, password)
 
         if success:
@@ -164,7 +199,7 @@ def re_enroll():
                 success="Re-enrollment completed successfully.",
                 username=username,
                 new_secret=result
-            )  
+            )
 
         return render_template(
             "re_enroll.html",
